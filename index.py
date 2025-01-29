@@ -10,7 +10,7 @@ def parse_date(date_str):
             return datetime.strptime(date_str, fmt).strftime('%d-%m-%Y')
         except ValueError:
             continue
-    return None  # Return None for unrecognized date formats
+    return None  
 
 def parse_amount(amount_str):
     """Convert amount strings to float after removing commas and handling 'cr' suffix."""
@@ -18,37 +18,44 @@ def parse_amount(amount_str):
         return 0.0, False  # Default to debit
     amount_str = amount_str.replace(',', '').strip()
     
-    is_credit = amount_str.endswith(" cr") or amount_str.endswith("Cr") or amount_str.endswith("CR")
-    amount = float(amount_str.replace(" cr", "").replace("Cr", "").replace("CR", "")) if is_credit else float(amount_str)
+    is_credit = amount_str.lower().endswith(" cr")
+    amount_str_clean = re.sub(r'\s*cr$', '', amount_str, flags=re.IGNORECASE)
+    amount = float(amount_str_clean)
 
-    return amount, is_credit  # Returns amount and whether it's credit
+    return amount, is_credit  
 
 def extract_currency(description, transaction_type):
     """Extract currency code for international transactions."""
-    # if transaction_type == "International":
-    #     match = re.search(r'\b[A-Z]{3}\b', description)  # Look for a three-letter currency code
-    #     return match.group() if match else "NA"  # Default to NA if no match
-    # return "INR"  # Default for domestic transactions
-    words = description.split()
-    if words:
-        return re.sub(r'[^a-zA-Z]', '', words[-1]) if transaction_type == "International" else "INR"
-    # return "unknown"
+    if transaction_type == "International":
+        words = description.split()
+        if words:
+            last_word = words[-1].upper()
+            if len(last_word) == 3 and last_word.isalpha():
+                return last_word
+            match = re.search(r'([A-Z]{3})$', description.upper())
+            if match:
+                return match.group()
+        return "NA"  # Default to NA if not found
+    return "INR"  # Default for domestic transactions
 
 def extract_location(description, transaction_type):
-    """Extract location (assumed as the last word in the description)."""
+    """Extract location (penultimate word for international, last word for domestic)."""
     words = description.split()
-    if words:
-        return re.sub(r'[^a-zA-Z]', '', words[-1]).lower() if transaction_type == "Domestic" else re.sub(r'[^a-zA-Z]', '', words[-2]).lower()
+    if transaction_type == "International":
+        if len(words) >= 2:
+            return re.sub(r'[^a-zA-Z]', '', words[-2]).lower()
+        elif words:
+            return re.sub(r'[^a-zA-Z]', '', words[-1]).lower()
+    else:
+        if words:
+            return re.sub(r'[^a-zA-Z]', '', words[-1]).lower()
     return "unknown"
 
 def standardize_statement(inputFile, outputFile):
     """Processes a bank statement CSV file and outputs a standardized format."""
-    rows = []  # To store all processed rows for sorting
+    rows = []  
     with open(inputFile, 'r', encoding='utf-8') as infile:
         reader = csv.reader(infile)
-        writer = csv.writer(open(outputFile, 'w', newline='', encoding='utf-8'))
-        writer.writerow(['Date', 'Transaction Description', 'Debit', 'Credit', 'Currency', 'CardName', 'Transaction', 'Location'])
-
         current_card_name = None
         transaction_type = "Domestic"
         date_col = desc_col = debit_col = credit_col = amount_col = None
@@ -56,85 +63,107 @@ def standardize_statement(inputFile, outputFile):
 
         for row in reader:
             if not row or all(cell.strip() == '' for cell in row):
-                continue  # Skip empty rows
+                continue  
 
-            """ Detect Transaction Type (Check all cells in the row) """
+            # Detect Transaction Type
             for cell in row:
-                cell = cell.strip()
-                if "Domestic" in cell:
+                cell_lower = cell.strip().lower()
+                if 'domestic' in cell_lower:
                     transaction_type = "Domestic"
                     break
-                elif "International" in cell:
+                elif 'international' in cell_lower:
                     transaction_type = "International"
                     break
 
-            """ Detect Column Positions (First Non-Empty Row) """
+            # Detect Column Positions
             if not header_processed:
                 for i, cell in enumerate(row):
-                    if 'Date' in cell:
+                    cell_lower = cell.strip().lower()
+                    if 'date' in cell_lower:
                         date_col = i
-                    elif 'Transaction Description' in cell or 'Transaction Details' in cell:
+                    elif 'transaction description' in cell_lower or 'transaction details' in cell_lower:
                         desc_col = i
-                    elif 'Debit' in cell:
+                    elif 'debit' in cell_lower:
                         debit_col = i
-                    elif 'Credit' in cell:
+                    elif 'credit' in cell_lower:
                         credit_col = i
-                    elif 'Amount' in cell:
+                    elif 'amount' in cell_lower:
                         amount_col = i
                 if date_col is not None and desc_col is not None:
                     header_processed = True
-                continue  # Skip header row
+                continue  
 
-            """ Detect Cardholder Name (Row with one populated cell) """
+            # Detect Cardholder Name
             non_empty_cells = [cell.strip() for cell in row if cell.strip()]
-            if len(non_empty_cells) == 1:  # If only one non-empty cell exists, it's likely a cardholder name
+            if len(non_empty_cells) == 1:
                 current_card_name = non_empty_cells[0]
-                continue  # Move to the next row after updating cardholder name
+                continue
 
-            """ Process Transaction Rows """
-            if len(row) >= 3:
-                date_str = row[date_col].strip()
-                description = row[desc_col].strip()
-                description_modified = " ".join(description.split()[:-1]) if transaction_type.lower() == "international" else description
+            # Process Transaction Rows
+            if len(row) >= max(filter(None, [date_col, desc_col, amount_col, debit_col, credit_col])) + 1:
+                date_str = row[date_col].strip() if date_col < len(row) else ''
+                description = row[desc_col].strip() if desc_col < len(row) else ''
 
                 if not date_str or not description:
-                    continue  # Skip rows with missing date or description
+                    continue  
 
                 parsed_date = parse_date(date_str)
                 if not parsed_date:
-                    continue  # Skip invalid dates
+                    continue  
 
-                """ Detect Format Type """
-                if len(row) >= 3 and amount_col is not None:  # Format 1: Date, Description, Amount
-                    amount, is_credit = parse_amount(row[amount_col].strip())
-                    debit = 0 if is_credit else amount
-                    credit = amount if is_credit else 0
-                elif len(row) >= 4 and amount_col is None:  # Format 2: Date, Description, Debit, Credit
-                    debit = parse_amount(row[debit_col].strip())[0] if row[debit_col].strip() else 0
-                    credit = parse_amount(row[credit_col].strip())[0] if row[credit_col].strip() else 0
+                # Handle Amount/Debit/Credit
+                debit = 0.0
+                credit = 0.0
+                if amount_col is not None and amount_col < len(row):
+                    amount_str = row[amount_col].strip()
+                    amount, is_credit = parse_amount(amount_str)
+                    debit = 0.0 if is_credit else amount
+                    credit = amount if is_credit else 0.0
+                elif debit_col is not None and credit_col is not None:
+                    debit_str = row[debit_col].strip() if debit_col < len(row) else ''
+                    credit_str = row[credit_col].strip() if credit_col < len(row) else ''
+                    debit = float(debit_str.replace(',', '')) if debit_str else 0.0
+                    credit = float(credit_str.replace(',', '')) if credit_str else 0.0
+
+                # Modify description for international transactions
+                if transaction_type == "International":
+                    words = description.split()
+                    if words and (len(words[-1]) == 3 and words[-1].isalpha()):
+                        description_modified = ' '.join(words[:-1])
+                    else:
+                        description_modified = description
                 else:
-                    continue  # Skip malformed rows
+                    description_modified = description
 
-                """ Extract Currency and Location """
+                # Extract currency and location
                 currency = extract_currency(description, transaction_type)
                 location = extract_location(description, transaction_type)
 
-                rows.append([parsed_date, description_modified, debit, credit, currency, current_card_name, transaction_type, location])
+                rows.append([
+                    parsed_date,
+                    description_modified.strip(),
+                    round(debit, 2),
+                    round(credit, 2),
+                    currency,
+                    current_card_name,
+                    transaction_type,
+                    location
+                ])
     
-    """ Sort rows by Date (asc) and Transaction Description (desc) """
-    # rows.sort(key=lambda x: (datetime.strptime(x[0], '%d-%m-%Y'), x[1].lower()), reverse=False)
-    rows.sort(key=lambda x: (datetime.strptime(x[0], '%d-%m-%Y'), -ord(x[1][0].lower())), reverse=False)
+    # Sort rows by Date (asc) and Transaction Description (desc)
+    rows.sort(key=lambda x: (
+        datetime.strptime(x[0], '%d-%m-%Y'),
+        tuple([-ord(c) for c in x[1].lower()])  
+    ))
 
-
-    """ Write sorted rows to the output file """
+    # Write sorted rows to the output file
     with open(outputFile, 'w', newline='', encoding='utf-8') as outfile:
         writer = csv.writer(outfile)
         writer.writerow(['Date', 'Transaction Description', 'Debit', 'Credit', 'Currency', 'CardName', 'Transaction', 'Location'])
-        writer.writerows(rows)  # Write all sorted rows
+        for row in rows:
+            writer.writerow(row)
 
     print(f"✅ Output file generated: {outputFile}")
-
-
 
 if __name__ == "__main__":
     inputFile = input("Enter the input CSV file name (e.g., HDFC-Input-Case1.csv): ").strip()
@@ -142,26 +171,25 @@ if __name__ == "__main__":
     if not inputFile.endswith('.csv'):
         inputFile += '.csv'
 
-    # *Generate Output File Name Dynamically*
+    # Generate Output File Name Dynamically
     if "Input" in inputFile:
         outputFile = inputFile.replace("Input", "Output")
     else:
         outputFile = inputFile.replace(".csv", "-Output.csv")
 
-    # *Check if the input file exists before proceeding*
+    # Check if the input file exists before proceeding
     if not os.path.exists(inputFile):
-        print(f"❌ Error: The file '{inputFile}' was not found. Please check the file name and try again.")
+        print(f" Error: The file '{inputFile}' was not found. Please check the file name and try again.")
     else:
         try:
             standardize_statement(inputFile, outputFile)
-            print(f"✅ Processing complete. The output file is saved as: {outputFile}")
+            print(f" Processing complete. The output file is saved as: {outputFile}")
         except UnicodeDecodeError:
-            print(f"❌ Error: Encoding issue detected in '{inputFile}'. Try opening it in Excel and re-saving as UTF-8 CSV.")
+            print(f" Error: Encoding issue detected in '{inputFile}'. Try opening it in Excel and re-saving as UTF-8 CSV.")
         except Exception as e:
-            print(f"❌ An unexpected error occurred: {e}")
+            print(f" An unexpected error occurred: {e}")
 
-
-    """ Input CSV File Example """
+""" Input CSV File Example """
     # HDFC-Input-Case1.csv
     # ICICI-Input-Case2.csv
     # Axis-Input-Case3.csv
