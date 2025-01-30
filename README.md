@@ -51,7 +51,7 @@ This Python script standardizes credit card statements from various banks into a
 
 ```bash
 git clone https://github.com/rishavs001/PHE-Standardize-Card-Statement.git
-cd credit-card-standardizer
+cd PHE-Standardize-Card-Statement
 ```
 
 2. Verify Python installation:
@@ -158,10 +158,6 @@ The standardized output CSV contains the following columns:
 4. Push to the branch
 5. Create a Pull Request
 
-## License
-
-This project is licensed under the MIT License. See the LICENSE file for details.
-
 ## Acknowledgments
 
 - Inspired by the need for standardized financial data analysis
@@ -170,3 +166,4 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ## Support
 
 For issues and feature requests, please use the GitHub Issues tracker.
+
